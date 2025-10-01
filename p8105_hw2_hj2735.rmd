@@ -5,26 +5,98 @@ date: "2025-09-30"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+### Problem 1 
+
+```{r Problem 1}
+library(tidyverse)
+
+# Load CSV from the data/ subdirectory
+pols_month = read_csv("data/fivethirtyeight_datasets/pols-month.csv")
+unemployment = read_csv("data/fivethirtyeight_datasets/unemployment.csv")
+snp = read_csv("data/fivethirtyeight_datasets/snp.csv")
 ```
 
-## R Markdown
+```{r}
+pols_month = pols_month |>
+  separate(mon, into = c("year", "month", "day"), sep = "-", convert = TRUE) |>
+  mutate(
+    month     = factor(month.name[month], levels = month.name),   # replace number with month name
+    president = if_else(prez_gop == 1, "gop", "dem")              # create president variable
+  ) |>
+  select(year, month, everything(), -prez_dem, -prez_gop, -day) |>  # remove prez_dem, prez_gop, day
+  arrange(year, month)
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+# Preview cleaned data
+glimpse(pols_month)
+head(pols_month)
 ```
 
-## Including Plots
+```{r}
+# Clean snp data
+snp = snp |>
+  separate(date, into = c("month", "day", "year"), sep = "/", convert = TRUE) |>
+  mutate(
+    # Convert 2-digit year to 4-digit year
+    year = if_else(year < 50, year + 2000, year + 1900),
+    month = factor(month.name[month], levels = month.name)
+  ) |>
+  select(year, month, everything(), -day) |>
+  arrange(year, month)
 
-You can also embed plots, for example:
+# Preview cleaned data
+glimpse(snp)
+head(snp)
 
-```{r pressure, echo=FALSE}
-plot(pressure)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+```{r}
+unemployment = unemployment |>
+  pivot_longer(
+    cols = -Year,
+    names_to = "month",
+    values_to = "unemployment"
+  ) |>
+  mutate(
+    year  = Year,
+    # standardize month abbreviations to full names
+    month = recode(month,
+                   Jan = "January", Feb = "February", Mar = "March",
+                   Apr = "April",   May = "May",      Jun = "June",
+                   Jul = "July",    Aug = "August",   Sep = "September",
+                   Oct = "October", Nov = "November", Dec = "December"),
+    month = factor(month, levels = month.name),
+    unemployment = as.numeric(unemployment)
+  ) |>
+  select(year, month, unemployment) |>
+  arrange(year, month)
+
+# Preview cleaned unemployment data
+glimpse(unemployment)
+head(unemployment)
+```
+
+```{r}
+merged = pols_month |>
+  left_join(snp, by = c("year", "month")) |>
+  left_join(unemployment, by = c("year", "month"))
+
+# Quick summary
+dim(merged)
+range(merged$year)
+names(merged)
+
+```
+
+The **`pols_month`** dataset provides monthly data, including the number of national politicians by party affiliation and an indicator of the president’s party (Democrat or Republican). The **`snp`** dataset records closing values of the S&P stock index on a monthly basis, giving a financial measure of U.S. market performance. The **`unemployment`** dataset contains monthly unemployment rates across the U.S. economy.  
+
+After cleaning and merging these three sources, the resulting dataset contains information on **politics, markets, and the economy** in one place. The merged data frame has `r dim(merged)[1]` rows and `r dim(merged)[2]` columns, covering the years from `r min(merged$year)` through `r max(merged$year)`. Key variables include `year`, `month`, `president`, `close` (S&P closing price), and `unemployment`. This unified dataset allows for examining relationships between political events, stock market fluctuations, and unemployment trends across decades.  
+
+
+```{r}
+# save the merged result for reference
+write_csv(merged, "data/merged_pols_snp_unemployment.csv")
+```
+
+
+
