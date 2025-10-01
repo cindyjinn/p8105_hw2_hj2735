@@ -98,5 +98,85 @@ After cleaning and merging these three sources, the resulting dataset contains i
 write_csv(merged, "data/merged_pols_snp_unemployment.csv")
 ```
 
+### Problem 2
+
+```{r}
+library(readxl)
+library(janitor)
+trash_path = "data/202509 Trash Wheel Collection Data.xlsx" 
+```
+
+```{r}
+read_trash <- function(sheet_name, wheel_label) {
+  read_excel(trash_path, sheet = sheet_name, skip = 1) |>
+    clean_names() |>
+    # keep only dumpster-specific rows (omit notes / figures)
+    filter(!is.na(dumpster)) |>
+    # standardize types and add identifier
+    mutate(
+      month = as.character(month),
+      year  = as.integer(year),
+      trash_wheel = wheel_label
+    ) |>
+    # round sports_balls to int if the column exists on that sheet
+    mutate(across(any_of("sports_balls"), ~ as.integer(round(.x)))) |>
+    # drop any columns that are entirely NA (leftover “notes” columns after clean_names)
+    select(where(~ !all(is.na(.x))))
+}
+
+mr   <- read_trash("Mr. Trash Wheel", "Mr. Trash Wheel")
+prof <- read_trash("Professor Trash Wheel", "Professor Trash Wheel")
+gwyn <- read_trash("Gwynns Falls Trash Wheel", "Gwynnda")
+
+# combine all three into one tidy dataset
+trash_all <- bind_rows(mr, prof, gwyn)
+
+```
+
+```{r}
+n_obs   <- nrow(trash_all)
+n_vars  <- ncol(trash_all)
+year_lo <- min(trash_all$year, na.rm = TRUE)
+year_hi <- max(trash_all$year, na.rm = TRUE)
+
+# summaries
+prof_total_weight <- prof |>
+  summarise(total_weight_tons = sum(weight_tons, na.rm = TRUE)) |>
+  pull(total_weight_tons)
+
+gwyn_june22_cigs <- gwyn |>
+  filter(year == 2022, month == "June") |>
+  summarise(total_cigs = sum(cigarette_butts, na.rm = TRUE)) |>
+  pull(total_cigs)
+
+```
+
+The **`Mr. Trash Wheel`** dataset provides per-dumpster collection records (by month and year), including weight and volume of trash removed and counts of common debris (e.g., plastic bottles, polystyrene, cigarette butts). The **`Professor Trash Wheel`** dataset contains the same types of measures for a different installation, recorded with the same structure. The **`Gwynnda (Gwynns Falls Trash Wheel)`** dataset likewise reports per-dumpster totals for weight, volume, and itemized debris counts.  
+
+After cleaning and combining these three sources, the resulting dataset contains information on **trash removal activity across multiple Trash Wheels** in one place. The merged data frame has **`r dim(trash_all)[1]`** rows and **`r dim(trash_all)[2]`** columns, covering the years from **`r min(trash_all$year, na.rm = TRUE)`** through **`r max(trash_all$year, na.rm = TRUE)`**. Key variables include `trash_wheel` (source identifier), `dumpster`, `month`, `year`, `date`, `weight_tons`, `volume_cubic_yards`, `plastic_bottles`, `polystyrene`, `cigarette_butts`, `glass_bottles`, `plastic_bags`, `wrappers`, `sports_balls` (where available), and `homes_powered`. 
+
+
+```{r}
+# save merged
+write_csv(trash_all, "data/merged_trash_wheels.csv")
+```
+
+
+### Problem 3
+
+```{r}
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+
+```
+
+
 
 

@@ -526,6 +526,85 @@ unemployment trends across decades.</p>
 <pre class="r"><code># save the merged result for reference
 write_csv(merged, &quot;data/merged_pols_snp_unemployment.csv&quot;)</code></pre>
 </div>
+<div id="problem-2" class="section level3">
+<h3>Problem 2</h3>
+<pre class="r"><code>library(readxl)
+library(janitor)</code></pre>
+<pre><code>## 
+## Attaching package: &#39;janitor&#39;</code></pre>
+<pre><code>## The following objects are masked from &#39;package:stats&#39;:
+## 
+##     chisq.test, fisher.test</code></pre>
+<pre class="r"><code>trash_path = &quot;data/202509 Trash Wheel Collection Data.xlsx&quot; </code></pre>
+<pre class="r"><code>read_trash &lt;- function(sheet_name, wheel_label) {
+  read_excel(trash_path, sheet = sheet_name, skip = 1) |&gt;
+    clean_names() |&gt;
+    # keep only dumpster-specific rows (omit notes / figures)
+    filter(!is.na(dumpster)) |&gt;
+    # standardize types and add identifier
+    mutate(
+      month = as.character(month),
+      year  = as.integer(year),
+      trash_wheel = wheel_label
+    ) |&gt;
+    # round sports_balls to int if the column exists on that sheet
+    mutate(across(any_of(&quot;sports_balls&quot;), ~ as.integer(round(.x)))) |&gt;
+    # drop any columns that are entirely NA (leftover “notes” columns after clean_names)
+    select(where(~ !all(is.na(.x))))
+}
+
+mr   &lt;- read_trash(&quot;Mr. Trash Wheel&quot;, &quot;Mr. Trash Wheel&quot;)</code></pre>
+<pre><code>## New names:
+## • `` -&gt; `...15`
+## • `` -&gt; `...16`</code></pre>
+<pre class="r"><code>prof &lt;- read_trash(&quot;Professor Trash Wheel&quot;, &quot;Professor Trash Wheel&quot;)
+gwyn &lt;- read_trash(&quot;Gwynns Falls Trash Wheel&quot;, &quot;Gwynnda&quot;)
+
+# combine all three into one tidy dataset
+trash_all &lt;- bind_rows(mr, prof, gwyn)</code></pre>
+<pre class="r"><code>n_obs   &lt;- nrow(trash_all)
+n_vars  &lt;- ncol(trash_all)
+year_lo &lt;- min(trash_all$year, na.rm = TRUE)
+year_hi &lt;- max(trash_all$year, na.rm = TRUE)
+
+# summaries
+prof_total_weight &lt;- prof |&gt;
+  summarise(total_weight_tons = sum(weight_tons, na.rm = TRUE)) |&gt;
+  pull(total_weight_tons)
+
+gwyn_june22_cigs &lt;- gwyn |&gt;
+  filter(year == 2022, month == &quot;June&quot;) |&gt;
+  summarise(total_cigs = sum(cigarette_butts, na.rm = TRUE)) |&gt;
+  pull(total_cigs)</code></pre>
+<p>The <strong><code>Mr. Trash Wheel</code></strong> dataset provides
+per-dumpster collection records (by month and year), including weight
+and volume of trash removed and counts of common debris (e.g., plastic
+bottles, polystyrene, cigarette butts). The
+<strong><code>Professor Trash Wheel</code></strong> dataset contains the
+same types of measures for a different installation, recorded with the
+same structure. The
+<strong><code>Gwynnda (Gwynns Falls Trash Wheel)</code></strong> dataset
+likewise reports per-dumpster totals for weight, volume, and itemized
+debris counts.</p>
+<p>After cleaning and combining these three sources, the resulting
+dataset contains information on <strong>trash removal activity across
+multiple Trash Wheels</strong> in one place. The merged data frame has
+<strong>1188</strong> rows and <strong>15</strong> columns, covering the
+years from <strong>2014</strong> through <strong>2025</strong>. Key
+variables include <code>trash_wheel</code> (source identifier),
+<code>dumpster</code>, <code>month</code>, <code>year</code>,
+<code>date</code>, <code>weight_tons</code>,
+<code>volume_cubic_yards</code>, <code>plastic_bottles</code>,
+<code>polystyrene</code>, <code>cigarette_butts</code>,
+<code>glass_bottles</code>, <code>plastic_bags</code>,
+<code>wrappers</code>, <code>sports_balls</code> (where available), and
+<code>homes_powered</code>.</p>
+<pre class="r"><code># save merged
+write_csv(trash_all, &quot;data/merged_trash_wheels.csv&quot;)</code></pre>
+</div>
+<div id="problem-3" class="section level3">
+<h3>Problem 3</h3>
+</div>
 
 
 
