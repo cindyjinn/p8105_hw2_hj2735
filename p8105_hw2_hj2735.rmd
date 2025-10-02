@@ -165,18 +165,158 @@ write_csv(trash_all, "data/merged_trash_wheels.csv")
 ### Problem 3
 
 ```{r}
+library(lubridate)
+library(stringr)
+zip_codes = read_csv("data/zillow_data/Zip Codes.csv")
+zori = read_csv("data/zillow_data/Zip_zori_uc_sfrcondomfr_sm_month_NYC.csv")
 
+zip_codes = zip_codes |> clean_names()
+zori = zori |> clean_names()
 ```
 
 ```{r}
+# County -> Borough map
+county_to_borough = c(
+  "Bronx"    = "Bronx",
+  "Kings"    = "Brooklyn",
+  "New York" = "Manhattan",
+  "Queens"   = "Queens",
+  "Richmond" = "Staten Island"
+)
 
+zip_tbl = zip_codes |>
+  transmute(
+    zip          = str_pad(as.character(zip_code), width = 5, pad = "0"),
+    county       = county,
+    borough      = recode(county, !!!county_to_borough),
+    neighborhood = neighborhood
+  ) |>
+  mutate(
+    neighborhood = str_squish(neighborhood),   # trim + collapse multiple spaces
+    neighborhood = na_if(neighborhood, "")     # turn blanks into NA
+  ) |>
+  distinct() |>
+  arrange(borough, neighborhood, zip)
 ```
 
 ```{r}
+# Detect monthly columns whether they look like "2015-01-31" or "x2015_01_31"
+date_cols = names(zori) |> keep(~ str_detect(.x, "^\\d{4}-\\d{2}-\\d{2}$"))
+if (length(date_cols) == 0) {
+  date_cols = names(zori) |> keep(~ str_detect(.x, "^(x)?\\d{4}[_-]\\d{2}[_-]\\d{2}$"))
+}
+stopifnot(length(date_cols) > 0)
 
+name_to_date = function(s) {
+  s |>
+    str_remove("^x") |>          # drop leading 'x' if present
+    str_replace_all("_", "-") |> 
+    ymd(quiet = TRUE)
+}
 
+zori_long = zori |>
+  pivot_longer(
+    cols      = all_of(date_cols),
+    names_to  = "date_name",
+    values_to = "zori"
+  ) |>
+  mutate(
+    zip   = str_pad(as.character(region_name), width = 5, pad = "0"),
+    date  = name_to_date(date_name),
+    year  = year(date),
+    month = month(date)
+  ) |>
+  select(zip, city, state_name, date, year, month, zori) |>
+  arrange(zip, date)
 ```
 
+```{r}
+zip_tbl_uni = zip_tbl |>
+  group_by(zip) |>
+  summarise(
+    borough      = dplyr::first(na.omit(borough)),
+    county       = dplyr::first(na.omit(county)),
+    neighborhood = paste(sort(unique(na.omit(neighborhood))), collapse = "; "),
+    .groups = "drop"
+)
+
+# then join with zip_tbl_uni instead of zip_tbl
+nyc_tidy = zori_long |>
+  left_join(zip_tbl_uni, by = "zip") |>
+  relocate(zip, borough, county, neighborhood, city, state_name,
+           date, year, month, zori) |>
+  arrange(borough, neighborhood, zip, date)
+
+write_csv(nyc_tidy, "data/nyc_zori_zip_tidy.csv")
+```
+
+```{r}
+# ZIPs present in the ZIP file but NOT in Zillow
+zips_in_zipfile = unique(zip_tbl$zip)
+zips_in_zillow  = str_pad(as.character(zori$region_name), 5, pad = "0")
+zips_missing_vec = setdiff(zips_in_zipfile, zips_in_zillow)
+
+zips_missing_tbl = tibble(zip = zips_missing_vec) |>
+  left_join(zip_tbl, by = "zip") |>
+  arrange(borough, neighborhood, zip)
+
+write_csv(zips_missing_tbl, "data/zips_missing_in_zillow.csv")
+
+# small sample for inline text
+examples_missing = zips_missing_tbl |> slice_head(n = 15)
+```
+
+```{r}
+# Compare Jan 2021 vs Jan 2020 (only where both exist)
+jan_2020 = nyc_tidy |>
+  filter(date == as.Date("2020-01-31")) |>
+  select(zip, zori_2020_01 = zori)
+
+jan_2021 = nyc_tidy |>
+  filter(date == as.Date("2021-01-31")) |>
+  select(zip, zori_2021_01 = zori)
+
+delta_2021_vs_2020 = jan_2020 |>
+  inner_join(jan_2021, by = "zip") |>
+  mutate(change_2021_minus_2020 = zori_2021_01 - zori_2020_01) |>
+  left_join(select(zip_tbl, zip, borough, neighborhood), by = "zip") |>
+  relocate(zip, borough, neighborhood, zori_2020_01, zori_2021_01, change_2021_minus_2020)
+
+top10_drop = delta_2021_vs_2020 |>
+  arrange(change_2021_minus_2020) |>
+  slice_head(n = 10) |>
+  mutate(
+    Jan_2020 = round(zori_2020_01),
+    Jan_2021 = round(zori_2021_01),
+    Change_2021_minus_2020 = round(change_2021_minus_2020)
+  ) |>
+  select(zip, borough, neighborhood, Jan_2020, Jan_2021, Change_2021_minus_2020)
+
+write_csv(top10_drop, "data/nyc_top10_drop_2020_to_2021.csv")
+
+top10_drop
+```
+
+```{r}
+# counts for write-up
+n_obs  = nrow(nyc_tidy)
+n_zip  = n_distinct(nyc_tidy$zip)
+# ignore empty strings for neighborhood counts
+n_nbhd = nyc_tidy |>
+  filter(neighborhood != "", neighborhood != " ") |>
+  distinct(neighborhood) |>
+  nrow()
+```
+
+
+
+The **ZIP code dataset** lists NYC ZIPs and their associated **county (borough) and neighborhood** names; this provides the geographic bridge to attach borough/neighborhood context to rental prices. The **Zillow ZORI dataset** provides **monthly rental price indices** by ZIP.
+
+After importing, cleaning, and merging, the resulting tidy dataset contains **`r n_obs`** observations (each row is **ZIP × month**), with **`r n_zip`** unique ZIP codes and **`r n_nbhd`** unique neighborhoods. Key variables include `zip`, `borough`, `neighborhood`, `date` (plus `year`, `month`), and `zori` (Zillow Observed Rent Index).
+
+There are **`r nrow(zips_missing_tbl)`** ZIP codes in the ZIP file that do not appear in Zillow (saved to file). Examples include **`r paste(examples_missing$zip, collapse = ", ")`**. These are commonly **special-use or non-residential** ZIPs (e.g., PO boxes, single-building/commercial ZIPs) or areas with **insufficient rental inventory**, so Zillow omits them.
+
+To assess pandemic-era changes, we compared **January 2021 vs January 2020** ZORI for ZIPs with both months available and list the **10 largest drops** in the table above. Declines cluster in core neighborhoods (notably in Manhattan), consistent with early-pandemic rental dynamics.
 
 
 

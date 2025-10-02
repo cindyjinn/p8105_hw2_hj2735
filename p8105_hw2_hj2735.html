@@ -604,6 +604,181 @@ write_csv(trash_all, &quot;data/merged_trash_wheels.csv&quot;)</code></pre>
 </div>
 <div id="problem-3" class="section level3">
 <h3>Problem 3</h3>
+<pre class="r"><code>library(lubridate)
+library(stringr)
+zip_codes = read_csv(&quot;data/zillow_data/Zip Codes.csv&quot;)</code></pre>
+<pre><code>## Rows: 322 Columns: 7
+## ── Column specification ────────────────────────────────────────────────────────
+## Delimiter: &quot;,&quot;
+## chr (4): County, County Code, File Date, Neighborhood
+## dbl (3): State FIPS, County FIPS, ZipCode
+## 
+## ℹ Use `spec()` to retrieve the full column specification for this data.
+## ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.</code></pre>
+<pre class="r"><code>zori = read_csv(&quot;data/zillow_data/Zip_zori_uc_sfrcondomfr_sm_month_NYC.csv&quot;)</code></pre>
+<pre><code>## Rows: 149 Columns: 125
+## ── Column specification ────────────────────────────────────────────────────────
+## Delimiter: &quot;,&quot;
+## chr   (6): RegionType, StateName, State, City, Metro, CountyName
+## dbl (119): RegionID, SizeRank, RegionName, 2015-01-31, 2015-02-28, 2015-03-3...
+## 
+## ℹ Use `spec()` to retrieve the full column specification for this data.
+## ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.</code></pre>
+<pre class="r"><code>zip_codes = zip_codes |&gt; clean_names()
+zori = zori |&gt; clean_names()</code></pre>
+<pre class="r"><code># County -&gt; Borough map
+county_to_borough = c(
+  &quot;Bronx&quot;    = &quot;Bronx&quot;,
+  &quot;Kings&quot;    = &quot;Brooklyn&quot;,
+  &quot;New York&quot; = &quot;Manhattan&quot;,
+  &quot;Queens&quot;   = &quot;Queens&quot;,
+  &quot;Richmond&quot; = &quot;Staten Island&quot;
+)
+
+zip_tbl = zip_codes |&gt;
+  transmute(
+    zip          = str_pad(as.character(zip_code), width = 5, pad = &quot;0&quot;),
+    county       = county,
+    borough      = recode(county, !!!county_to_borough),
+    neighborhood = neighborhood
+  ) |&gt;
+  mutate(
+    neighborhood = str_squish(neighborhood),   # trim + collapse multiple spaces
+    neighborhood = na_if(neighborhood, &quot;&quot;)     # turn blanks into NA
+  ) |&gt;
+  distinct() |&gt;
+  arrange(borough, neighborhood, zip)</code></pre>
+<pre class="r"><code># Detect monthly columns whether they look like &quot;2015-01-31&quot; or &quot;x2015_01_31&quot;
+date_cols = names(zori) |&gt; keep(~ str_detect(.x, &quot;^\\d{4}-\\d{2}-\\d{2}$&quot;))
+if (length(date_cols) == 0) {
+  date_cols = names(zori) |&gt; keep(~ str_detect(.x, &quot;^(x)?\\d{4}[_-]\\d{2}[_-]\\d{2}$&quot;))
+}
+stopifnot(length(date_cols) &gt; 0)
+
+name_to_date = function(s) {
+  s |&gt;
+    str_remove(&quot;^x&quot;) |&gt;          # drop leading &#39;x&#39; if present
+    str_replace_all(&quot;_&quot;, &quot;-&quot;) |&gt; 
+    ymd(quiet = TRUE)
+}
+
+zori_long = zori |&gt;
+  pivot_longer(
+    cols      = all_of(date_cols),
+    names_to  = &quot;date_name&quot;,
+    values_to = &quot;zori&quot;
+  ) |&gt;
+  mutate(
+    zip   = str_pad(as.character(region_name), width = 5, pad = &quot;0&quot;),
+    date  = name_to_date(date_name),
+    year  = year(date),
+    month = month(date)
+  ) |&gt;
+  select(zip, city, state_name, date, year, month, zori) |&gt;
+  arrange(zip, date)</code></pre>
+<pre class="r"><code>zip_tbl_uni = zip_tbl |&gt;
+  group_by(zip) |&gt;
+  summarise(
+    borough      = dplyr::first(na.omit(borough)),
+    county       = dplyr::first(na.omit(county)),
+    neighborhood = paste(sort(unique(na.omit(neighborhood))), collapse = &quot;; &quot;),
+    .groups = &quot;drop&quot;
+)
+
+# then join with zip_tbl_uni instead of zip_tbl
+nyc_tidy = zori_long |&gt;
+  left_join(zip_tbl_uni, by = &quot;zip&quot;) |&gt;
+  relocate(zip, borough, county, neighborhood, city, state_name,
+           date, year, month, zori) |&gt;
+  arrange(borough, neighborhood, zip, date)
+
+write_csv(nyc_tidy, &quot;data/nyc_zori_zip_tidy.csv&quot;)</code></pre>
+<pre class="r"><code># ZIPs present in the ZIP file but NOT in Zillow
+zips_in_zipfile = unique(zip_tbl$zip)
+zips_in_zillow  = str_pad(as.character(zori$region_name), 5, pad = &quot;0&quot;)
+zips_missing_vec = setdiff(zips_in_zipfile, zips_in_zillow)
+
+zips_missing_tbl = tibble(zip = zips_missing_vec) |&gt;
+  left_join(zip_tbl, by = &quot;zip&quot;) |&gt;
+  arrange(borough, neighborhood, zip)
+
+write_csv(zips_missing_tbl, &quot;data/zips_missing_in_zillow.csv&quot;)
+
+# small sample for inline text
+examples_missing = zips_missing_tbl |&gt; slice_head(n = 15)</code></pre>
+<pre class="r"><code># Compare Jan 2021 vs Jan 2020 (only where both exist)
+jan_2020 = nyc_tidy |&gt;
+  filter(date == as.Date(&quot;2020-01-31&quot;)) |&gt;
+  select(zip, zori_2020_01 = zori)
+
+jan_2021 = nyc_tidy |&gt;
+  filter(date == as.Date(&quot;2021-01-31&quot;)) |&gt;
+  select(zip, zori_2021_01 = zori)
+
+delta_2021_vs_2020 = jan_2020 |&gt;
+  inner_join(jan_2021, by = &quot;zip&quot;) |&gt;
+  mutate(change_2021_minus_2020 = zori_2021_01 - zori_2020_01) |&gt;
+  left_join(select(zip_tbl, zip, borough, neighborhood), by = &quot;zip&quot;) |&gt;
+  relocate(zip, borough, neighborhood, zori_2020_01, zori_2021_01, change_2021_minus_2020)
+
+top10_drop = delta_2021_vs_2020 |&gt;
+  arrange(change_2021_minus_2020) |&gt;
+  slice_head(n = 10) |&gt;
+  mutate(
+    Jan_2020 = round(zori_2020_01),
+    Jan_2021 = round(zori_2021_01),
+    Change_2021_minus_2020 = round(change_2021_minus_2020)
+  ) |&gt;
+  select(zip, borough, neighborhood, Jan_2020, Jan_2021, Change_2021_minus_2020)
+
+write_csv(top10_drop, &quot;data/nyc_top10_drop_2020_to_2021.csv&quot;)
+
+top10_drop</code></pre>
+<pre><code>## # A tibble: 10 × 6
+##    zip   borough   neighborhood         Jan_2020 Jan_2021 Change_2021_minus_2020
+##    &lt;chr&gt; &lt;chr&gt;     &lt;chr&gt;                   &lt;dbl&gt;    &lt;dbl&gt;                  &lt;dbl&gt;
+##  1 10007 Manhattan Lower Manhattan          6334     5422                   -913
+##  2 10069 Manhattan &lt;NA&gt;                     4623     3875                   -748
+##  3 10009 Manhattan Lower East Side          3406     2692                   -714
+##  4 10016 Manhattan Gramercy Park and M…     3731     3019                   -712
+##  5 10001 Manhattan Chelsea and Clinton      4108     3398                   -710
+##  6 10002 Manhattan Lower East Side          3645     2935                   -710
+##  7 10004 Manhattan Lower Manhattan          3150     2444                   -706
+##  8 10038 Manhattan Lower Manhattan          3573     2876                   -698
+##  9 10012 Manhattan Greenwich Village a…     3629     2942                   -686
+## 10 10010 Manhattan Gramercy Park and M…     3697     3012                   -685</code></pre>
+<pre class="r"><code># counts for write-up
+n_obs  = nrow(nyc_tidy)
+n_zip  = n_distinct(nyc_tidy$zip)
+# ignore empty strings for neighborhood counts
+n_nbhd = nyc_tidy |&gt;
+  filter(neighborhood != &quot;&quot;, neighborhood != &quot; &quot;) |&gt;
+  distinct(neighborhood) |&gt;
+  nrow()</code></pre>
+<p>The <strong>ZIP code dataset</strong> lists NYC ZIPs and their
+associated <strong>county (borough) and neighborhood</strong> names;
+this provides the geographic bridge to attach borough/neighborhood
+context to rental prices. The <strong>Zillow ZORI dataset</strong>
+provides <strong>monthly rental price indices</strong> by ZIP.</p>
+<p>After importing, cleaning, and merging, the resulting tidy dataset
+contains <strong>17284</strong> observations (each row is <strong>ZIP ×
+month</strong>), with <strong>149</strong> unique ZIP codes and
+<strong>42</strong> unique neighborhoods. Key variables include
+<code>zip</code>, <code>borough</code>, <code>neighborhood</code>,
+<code>date</code> (plus <code>year</code>, <code>month</code>), and
+<code>zori</code> (Zillow Observed Rent Index).</p>
+<p>There are <strong>171</strong> ZIP codes in the ZIP file that do not
+appear in Zillow (saved to file). Examples include <strong>10474, 10475,
+10464, 10499, 10550, 10704, 10705, 10803, 11239, 11224, 11202, 11241,
+11242, 11243, 11245</strong>. These are commonly <strong>special-use or
+non-residential</strong> ZIPs (e.g., PO boxes,
+single-building/commercial ZIPs) or areas with <strong>insufficient
+rental inventory</strong>, so Zillow omits them.</p>
+<p>To assess pandemic-era changes, we compared <strong>January 2021 vs
+January 2020</strong> ZORI for ZIPs with both months available and list
+the <strong>10 largest drops</strong> in the table above. Declines
+cluster in core neighborhoods (notably in Manhattan), consistent with
+early-pandemic rental dynamics.</p>
 </div>
 
 
